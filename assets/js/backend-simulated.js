@@ -10,7 +10,7 @@
 // would on a server.
 
 import { sleep, sha256Hex, abortError } from './util.js';
-import { STORES, idbGet, idbPut, idbDel, idbAll, idbDeletePrefix, idbGetPrefix, partKey } from './idb.js';
+import { STORES, idbGet, idbPut, idbDel, idbAll, idbDeletePrefix, idbGetPrefix, idbKeysPrefix, partKey } from './idb.js';
 
 export class HttpError extends Error {
   constructor(status, message, { retryable = status >= 500 || status === 429 } = {}) {
@@ -79,13 +79,31 @@ export class SimulatedBackend {
     }
   }
 
+  /**
+   * Which parts does the store already hold?
+   *
+   * Derived from the part keys rather than kept as a field on the session, because
+   * parts arrive concurrently: a read-modify-write of one shared record loses updates,
+   * and the upload then fails at completion with "missing parts". The real server in
+   * server/ has the same constraint and solves it the same way.
+   */
+  async #received(uploadId) {
+    const keys = await idbKeysPrefix(STORES.parts, `${uploadId}#`);
+    return keys.map((k) => Number(String(k).split('#')[1])).sort((a, b) => a - b);
+  }
+
   /** POST /uploads — start a session, or hand back the one matching this fingerprint. */
   async createUpload(meta, { signal } = {}) {
     await this.#roundTrip(signal);
     const sessions = await idbAll(STORES.sessions);
     const existing = sessions.find((s) => s.fingerprint === meta.fingerprint && !s.completed);
     if (existing) {
-      return { uploadId: existing.uploadId, received: existing.received, resumed: true, meta: existing.meta };
+      return {
+        uploadId: existing.uploadId,
+        received: await this.#received(existing.uploadId),
+        resumed: true,
+        meta: existing.meta,
+      };
     }
     // Keep at most two finished uploads around; 50 MB files add up fast in IndexedDB.
     const finished = sessions.filter((s) => s.completed).sort((a, b) => b.createdAt - a.createdAt);
@@ -96,8 +114,6 @@ export class SimulatedBackend {
       uploadId,
       fingerprint: meta.fingerprint,
       meta,
-      received: [],
-      digests: {},
       createdAt: Date.now(),
       completed: false,
     };
@@ -110,7 +126,7 @@ export class SimulatedBackend {
     await this.#roundTrip(signal);
     const session = await idbGet(STORES.sessions, uploadId);
     if (!session) throw new HttpError(404, 'Unknown upload session', { retryable: false });
-    return { uploadId, received: session.received, meta: session.meta, completed: session.completed };
+    return { uploadId, received: await this.#received(uploadId), meta: session.meta, completed: session.completed };
   }
 
   /** PUT /uploads/:id/parts/:index */
@@ -131,13 +147,11 @@ export class SimulatedBackend {
       }
     }
 
-    await idbPut(STORES.parts, partKey(uploadId, index), blob);
-    const fresh = await idbGet(STORES.sessions, uploadId);
-    if (!fresh.received.includes(index)) fresh.received.push(index);
-    fresh.digests[index] = checksum;
-    fresh.received.sort((a, b) => a - b);
-    await idbPut(STORES.sessions, uploadId, fresh);
-    return { index, size: blob.size, received: fresh.received.length };
+    // The digest travels with the part, so no two concurrent requests ever write the
+    // same record.
+    await idbPut(STORES.parts, partKey(uploadId, index), { blob, checksum, size: blob.size });
+    const received = await this.#received(uploadId);
+    return { index, size: blob.size, received: received.length };
   }
 
   /** POST /uploads/:id/complete — stitch the parts and verify the whole file. */
@@ -146,15 +160,15 @@ export class SimulatedBackend {
     const session = await idbGet(STORES.sessions, uploadId);
     if (!session) throw new HttpError(404, 'Unknown upload session', { retryable: false });
     const expected = session.meta.totalChunks;
-    if (session.received.length !== expected) {
-      throw new HttpError(409, `Missing parts: have ${session.received.length} of ${expected}`, { retryable: false });
-    }
     const parts = await idbGetPrefix(STORES.parts, `${uploadId}#`); // key order == chunk order
-    const file = new Blob(parts, { type: session.meta.fileType || 'application/octet-stream' });
+    if (parts.length !== expected) {
+      throw new HttpError(409, `Missing parts: have ${parts.length} of ${expected}`, { retryable: false });
+    }
+    const file = new Blob(parts.map((p) => p.blob), { type: session.meta.fileType || 'application/octet-stream' });
     if (file.size !== session.meta.fileSize) {
       throw new HttpError(409, `Assembled size ${file.size} ≠ declared ${session.meta.fileSize}`, { retryable: false });
     }
-    const serverManifest = await this.#manifestOf(session);
+    const serverManifest = await this.#manifestOf(parts);
     session.completed = true;
     session.completedAt = Date.now();
     await idbPut(STORES.sessions, uploadId, session);
@@ -162,16 +176,16 @@ export class SimulatedBackend {
       ok: true,
       uploadId,
       size: file.size,
-      parts: session.received.length,
+      parts: parts.length,
       manifestHash: serverManifest,
       manifestMatches: !manifestHash || manifestHash === serverManifest,
       blob: file, // a real API would return a URL; here the file never left the tab
     };
   }
 
-  async #manifestOf(session) {
-    const digests = session.received.map((i) => session.digests[i]).filter(Boolean);
-    if (digests.length !== session.received.length) return null;
+  async #manifestOf(parts) {
+    const digests = parts.map((p) => p.checksum).filter(Boolean);
+    if (digests.length !== parts.length) return null;
     const { manifestHash } = await import('./util.js');
     return manifestHash(digests);
   }
@@ -187,7 +201,7 @@ export class SimulatedBackend {
     const session = await idbGet(STORES.sessions, uploadId);
     if (!session) throw new HttpError(404, 'Unknown upload session', { retryable: false });
     const parts = await idbGetPrefix(STORES.parts, `${uploadId}#`);
-    return new Blob(parts, { type: session.meta.fileType || 'application/octet-stream' });
+    return new Blob(parts.map((p) => p.blob), { type: session.meta.fileType || 'application/octet-stream' });
   }
 
   /** Housekeeping so the demo does not slowly fill the user's disk. */
@@ -199,6 +213,7 @@ export class SimulatedBackend {
 
   async listSessions() {
     const all = await idbAll(STORES.sessions);
-    return all.sort((a, b) => b.createdAt - a.createdAt);
+    const withCounts = await Promise.all(all.map(async (s) => ({ ...s, received: await this.#received(s.uploadId) })));
+    return withCounts.sort((a, b) => b.createdAt - a.createdAt);
   }
 }

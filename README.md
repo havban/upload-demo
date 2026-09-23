@@ -104,11 +104,12 @@ npm test -- 50mb        # just the 50 MB generate → upload → preview run
 
 | suite | covers |
 |---|---|
-| `smoke-chunked` | generate → chunked upload → pause → resume → retries → integrity check |
+| `smoke-chunked` | generate → chunked upload → pause → resume → retries → integrity check, plus 21 parts with 8 in flight |
 | `smoke-rows` | generate → worker parse → batched import → validation report |
 | `smoke-preview` | sample PDF paging, virtualised grid, deep scroll, go-to-row, search |
 | `smoke-server` | the same upload client against the real Node server |
 | `smoke-50mb` | 50 MB end to end, including the hand-off into the preview page |
+| `smoke-analytics` | every custom event fires, is namespaced, and leaks no query values |
 
 ## Layout
 
@@ -124,12 +125,41 @@ assets/
     backend-simulated.js backend-rest.js   the two interchangeable "servers"
     row-importer.js backend-rows.js    batched row import (demo 2)
     xlsx.worker.js sheet-client.js     workbook parsing off the main thread
+    analytics.js                       GoatCounter events, namespaced upload-demo/
     page-*.js                          one controller per page
   vendor/                              SheetJS 0.18.5, pdf.js 4.8.69
 server/server.mjs                      real implementation of the upload API
 tools/generate-samples.mjs             writes samples/
 tests/                                 Playwright smoke tests
 ```
+
+## Analytics
+
+The pages carry [GoatCounter](https://www.goatcounter.com/) — cookie-less, no personal
+data, Do Not Track honoured:
+
+```html
+<script data-goatcounter="https://havban.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+```
+
+`count.js` counts the page view itself. [`assets/js/analytics.js`](assets/js/analytics.js)
+adds the custom events — which file was generated, whether an upload finished and
+verified, which chunk or batch size was used, which preview controls were tried — through
+`window.goatcounter.count()`, queueing anything logged before the script loads and falling
+back to the pixel endpoint if an ad blocker eats it.
+
+What is **not** sent: file names, file contents, row values, or anything about a file you
+drop in. Only counters, and sizes as buckets (`upload-done-25-60mb`), never exact figures.
+
+Every custom event is namespaced **`upload-demo/`**, because the dashboard is shared with
+other apps on the same account. Page views keep their real path; the query string is
+stripped from them (so `preview.html?stash=…` is one row) and the useful parameters come
+back as a single `url?utm_source=…` event.
+
+`count.js` ignores `localhost`, so running the demo locally never reaches the dashboard,
+and the Playwright suites block the endpoint outright. To turn analytics off entirely,
+delete the two `<script>` tags from the four HTML pages — everything else keeps working.
 
 ## Known edges
 

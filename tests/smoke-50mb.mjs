@@ -1,5 +1,6 @@
 // The headline path: generate 50 MB, upload it in chunks, hand it to the preview page.
 import { chromium } from 'playwright';
+import { blockAnalytics } from './helpers.mjs';
 
 const base = process.env.BASE || 'http://localhost:8787';
 const browser = await chromium.launch();
@@ -14,6 +15,7 @@ const setRange = (sel, value) => page.evaluate(([s, v]) => {
   n.dispatchEvent(new Event('input', { bubbles: true }));
 }, [sel, value]);
 
+await blockAnalytics(page);
 await page.goto(`${base}/chunked-upload.html`, { waitUntil: 'networkidle' });
 await page.selectOption('#genSize', '50');
 await setRange('#optBw', '600');

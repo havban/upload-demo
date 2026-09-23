@@ -29,8 +29,14 @@ Conventions and traps, so the next change does not rediscover them.
   combine (`manifestHash()` in `util.js`). The server does the same thing in
   `server/server.mjs` — if you change the format, change both or the integrity check
   starts failing for everyone.
-- **Concurrent part uploads must not read-modify-write one metadata file.** The server
-  learned this the hard way and now writes `<index>.sha256` per part.
+- **Concurrent part uploads must not read-modify-write one shared record.** Both
+  backends learned this the hard way: with several parts in flight, two requests read the
+  same session snapshot and the second write drops the first, so the upload dies at
+  completion with "missing parts: have 5 of 6". The server writes `<index>.sha256` per
+  part; the simulated backend stores the digest inside the part record and derives
+  `received` from the IndexedDB key range. Neither keeps a mutable `received` array.
+  `tests/smoke-chunked.mjs` covers it with 21 parts and 8 in flight — the race only shows
+  up on a fast link.
 - **PDF content must stay ASCII.** `pdf-writer.js` tracks byte offsets using string
   lengths, which is only valid because `esc()` strips anything outside `\x20-\x7e`. If you
   add non-ASCII text, the xref table silently goes wrong.
@@ -60,6 +66,28 @@ what is marked retryable, everything else fails the upload immediately.
 
 Demo 2 has its own, smaller contract in `backend-rows.js`:
 `createImport`, `postBatch`, `commit`.
+
+## Analytics
+
+`assets/js/analytics.js` is a port of rhino-rex's `js/analytics.js` without the
+game-specific local tally. Two rules matter:
+
+- **Every custom event goes through `event()` / `once()`**, which prefixes it with
+  `upload-demo/`. The GoatCounter site is shared with `rhino-rex/` and
+  `belajar-menulis/`; an unprefixed `export-csv` is indistinguishable from anything else
+  on the dashboard. `tests/smoke-analytics.mjs` fails the build if an unprefixed event
+  escapes, or if a page view is sent from the module (count.js already does that).
+- **Never put user data in an event name.** Sizes and row counts go through
+  `sizeBucket()` / `rowBucket()`; query strings are filtered to `KEEP_PARAMS` and
+  truncated. An event name derived from something a visitor controls is an open door to
+  minting unlimited dashboard rows.
+
+Use `once()` for anything a visitor can trigger repeatedly (zoom, paging, search) and
+`event()` for milestones (upload finished, import finished).
+
+`count.js` ignores localhost, so local runs never reach the dashboard; the test helpers in
+`tests/helpers.mjs` block the endpoint as well, and `stubAnalytics()` records what the
+page *would* have sent.
 
 ## Testing
 

@@ -7,6 +7,21 @@
 <meta name="description" content="A static demo of chunked large-file uploads with a progress bar, batched row imports from Excel, and in-browser PDF/Excel preview.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📤</text></svg>">
 <link rel="stylesheet" href="assets/css/app.css">
+<!-- GoatCounter: privacy-friendly, cookie-less analytics. Dashboard:
+     https://havban.goatcounter.com  (assets/js/analytics.js sends the custom events) -->
+<script>
+  // count.js counts `pathname + search` by default, which would split one page across
+  // every query string that reaches it — preview.html?stash=f_abc123 is the same page as
+  // preview.html. Strip it so the dashboard shows one row per page; the query is not
+  // lost, analytics.js reports the interesting parameters as their own event.
+  //
+  // Set before count.js loads: it does `window.goatcounter = window.goatcounter || {}`
+  // and hangs count() off the same object, so this setting survives. Custom events pass
+  // their own path and are not touched by the callback.
+  window.goatcounter = { path: function (p) { return p.split('?')[0]; } };
+</script>
+<script data-goatcounter="https://havban.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -126,5 +141,9 @@ DELETE /uploads/:id                → discard the session</div>
 <footer class="site">
   Static demo · no data leaves your browser · <a href="https://github.com/havban/upload-demo">github.com/havban/upload-demo</a>
 </footer>
+<script type="module">
+  import { boot } from './assets/js/analytics.js';
+  boot();
+</script>
 </body>
 </html>

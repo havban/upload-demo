@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { blockAnalytics } from './helpers.mjs';
 
 const base = process.env.BASE || 'http://localhost:8787';
 const browser = await chromium.launch();
@@ -7,6 +8,7 @@ const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
+await blockAnalytics(page);
 await page.goto(`${base}/row-upload.html`, { waitUntil: 'networkidle' });
 
 await page.selectOption('#genRows', '10000');

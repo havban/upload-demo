@@ -1,5 +1,6 @@
 // End-to-end against the real Node server in server/ (start it first).
 import { chromium } from 'playwright';
+import { blockAnalytics } from './helpers.mjs';
 
 const base = process.env.BASE || 'http://localhost:8787';
 const browser = await chromium.launch();
@@ -8,6 +9,7 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
+await blockAnalytics(page);
 await page.goto(`${base}/chunked-upload.html`, { waitUntil: 'networkidle' });
 await page.selectOption('#optBackend', 'rest');
 await page.fill('#optRestUrl', base);

@@ -7,6 +7,7 @@ import { SheetReader } from './sheet-client.js';
 import { RowIngestBackend } from './backend-rows.js';
 import { BatchImporter, IMPORT_STATE } from './row-importer.js';
 import { stashFile } from './idb.js';
+import { boot, event, once, rowBucket } from './analytics.js';
 
 const log = new Logger($('#log'));
 const backend = new RowIngestBackend();
@@ -82,6 +83,7 @@ $('#genXlsx').addEventListener('click', async () => {
       },
     });
     log.ok(`Generated ${generated.name} — ${fmtNum(rowCount)} rows, ${fmtBytes(generated.size)} in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    event(`generate-rows-${rowBucket(rowCount)}`, `Generated a workbook: ${rowBucket(rowCount)} rows`);
     await loadFile(generated);
   } catch (err) {
     log.err(`Generation failed: ${err.message}`);
@@ -96,6 +98,7 @@ $('#btnSaveXlsx').addEventListener('click', () => file && downloadBlob(file, fil
 
 $('#btnPreview').addEventListener('click', async (e) => {
   e.preventDefault();
+  event('preview-handoff', 'Opened a workbook in the preview page');
   const id = await stashFile({ name: file.name, type: file.type || XLSX_MIME, size: file.size, blob: file, source: 'row import' });
   location.href = `preview.html?stash=${encodeURIComponent(id)}`;
 });
@@ -168,6 +171,7 @@ async function parseFile() {
     $('#parseOuter').classList.remove('busy');
     $('#parseOuter').classList.add('ok');
     log.ok(`Parsed ${fmtNum(dataRows.length)} rows in ${secs.toFixed(1)}s`);
+    event(`parse-${rowBucket(dataRows.length)}`, `Parsed a sheet: ${rowBucket(dataRows.length)} rows`);
     prepareImport();
   } catch (err) {
     $('#parseBadge').textContent = 'failed';
@@ -175,6 +179,7 @@ async function parseFile() {
     $('#parseOuter').classList.remove('busy');
     setParseProgress(100, err.message);
     log.err(`Parse failed: ${err.message}`);
+    once('parse-failed', 'A workbook failed to parse');
   }
 }
 
@@ -339,6 +344,7 @@ function addRejections(list) {
 }
 
 $('#btnExportErrors').addEventListener('click', () => {
+  once('export-error-csv', 'Exported the rejected-row report');
   const csv = importer.errorReportCsv();
   downloadBlob(new Blob([csv], { type: 'text/csv' }), `rejected-rows-${file.name.replace(/\.[^.]+$/, '')}.csv`);
 });
@@ -347,6 +353,9 @@ function onImportDone(summary) {
   const box = $('#importResult');
   box.hidden = false;
   const failed = summary.failedBatches;
+  event(`import-done-${rowBucket(summary.inserted)}`, `Import finished: ${rowBucket(summary.inserted)} rows`);
+  if (summary.rejected) once('import-rejects', 'An import hit rows that failed validation');
+  if (failed) once('import-abandoned-batches', 'An import gave up on at least one batch');
   box.replaceChildren(el('div', { class: `alert ${failed ? 'warn' : 'ok'}` },
     `${fmtNum(summary.inserted)} rows inserted, ${fmtNum(summary.rejected)} rejected by validation`
     + `${failed ? `, ${failed} batch(es) abandoned after repeated failures` : ''} — `
@@ -360,11 +369,14 @@ function onImportDone(summary) {
 $('#btnStart').addEventListener('click', () => {
   if (importer.state === IMPORT_STATE.DONE || importer.state === IMPORT_STATE.ABORTED) prepareImport();
   log.clear();
+  event('import-start', 'Started a batched import');
+  once(`batch-${importer.batchSize}`, `Batch size: ${fmtNum(importer.batchSize)} rows`);
   importer.start();
 });
-$('#btnPause').addEventListener('click', () => importer.pause());
+$('#btnPause').addEventListener('click', () => { once('import-paused', 'Paused an import'); importer.pause(); });
 $('#btnResume').addEventListener('click', () => importer.resume());
-$('#btnCancel').addEventListener('click', () => importer.abort());
+$('#btnCancel').addEventListener('click', () => { once('import-cancelled', 'Cancelled an import'); importer.abort(); });
 $('#btnClearLog').addEventListener('click', () => log.clear());
 
+boot();
 log.info('Ready. Generate a workbook (or drop one in) — it will be parsed, then imported in batches.');

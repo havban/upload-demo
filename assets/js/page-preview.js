@@ -3,6 +3,7 @@
 import { $, el, fmtBytes, fmtNum, kindOf, extOf, downloadBlob } from './util.js';
 import { SheetReader } from './sheet-client.js';
 import { listStashedFiles, idbGet, STORES } from './idb.js';
+import { boot, event, once, sizeBucket } from './analytics.js';
 import * as pdfjs from '../vendor/pdf.min.mjs';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdf.worker.min.mjs', import.meta.url).href;
@@ -25,9 +26,14 @@ dropzone.addEventListener('drop', (e) => {
 });
 input.addEventListener('change', () => { if (input.files?.[0]) open(input.files[0]); input.value = ''; });
 
-$('#btnSamplePdf').addEventListener('click', () => openUrl('samples/synthetic-ledger-2mb.pdf', 'application/pdf'));
-$('#btnSampleXlsx').addEventListener('click', () => openUrl('samples/orders-20000-rows.xlsx',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+$('#btnSamplePdf').addEventListener('click', () => {
+  once('sample-pdf', 'Opened the sample PDF');
+  openUrl('samples/synthetic-ledger-2mb.pdf', 'application/pdf');
+});
+$('#btnSampleXlsx').addEventListener('click', () => {
+  once('sample-xlsx', 'Opened the sample workbook');
+  openUrl('samples/orders-20000-rows.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+});
 
 async function openUrl(url, type) {
   const name = url.split('/').pop();
@@ -48,6 +54,7 @@ async function open(file) {
       el('div', { class: 'fmeta', text: `${fmtBytes(file.size)} · ${file.type || extOf(file.name) || 'unknown type'}` }),
     ),
   ));
+  event(`preview-${kind}-${sizeBucket(file.size)}`, `Previewed a ${kind} of ${sizeBucket(file.size)}`);
   $('#emptyPane').hidden = true;
   $('#pdfPane').hidden = kind !== 'pdf';
   $('#sheetPane').hidden = kind !== 'xlsx';
@@ -115,6 +122,7 @@ async function renderPdf() {
 
 const goPage = (n) => {
   if (!pdfState.doc) return;
+  once('pdf-paged', 'Moved through a PDF');
   pdfState.page = Math.max(1, Math.min(pdfState.doc.numPages, n));
   renderPdf();
 };
@@ -123,11 +131,11 @@ $('#pdfPrev').addEventListener('click', () => goPage(pdfState.page - pdfState.pe
 $('#pdfNext').addEventListener('click', () => goPage(pdfState.page + pdfState.perView));
 $('#pdfLast').addEventListener('click', () => goPage(pdfState.doc?.numPages || 1));
 $('#pdfPage').addEventListener('change', (e) => goPage(Number(e.target.value)));
-$('#pdfZoomIn').addEventListener('click', () => { pdfState.fitWidth = false; pdfState.scale = Math.min(4, pdfState.scale * 1.25); $('#pdfZoomLabel').textContent = `${Math.round(pdfState.scale * 100)}%`; renderPdf(); });
-$('#pdfZoomOut').addEventListener('click', () => { pdfState.fitWidth = false; pdfState.scale = Math.max(0.2, pdfState.scale / 1.25); $('#pdfZoomLabel').textContent = `${Math.round(pdfState.scale * 100)}%`; renderPdf(); });
+$('#pdfZoomIn').addEventListener('click', () => { once('pdf-zoom', 'Zoomed a PDF'); pdfState.fitWidth = false; pdfState.scale = Math.min(4, pdfState.scale * 1.25); $('#pdfZoomLabel').textContent = `${Math.round(pdfState.scale * 100)}%`; renderPdf(); });
+$('#pdfZoomOut').addEventListener('click', () => { once('pdf-zoom', 'Zoomed a PDF'); pdfState.fitWidth = false; pdfState.scale = Math.max(0.2, pdfState.scale / 1.25); $('#pdfZoomLabel').textContent = `${Math.round(pdfState.scale * 100)}%`; renderPdf(); });
 $('#pdfFit').addEventListener('click', () => { pdfState.fitWidth = true; renderPdf(); });
-$('#pdfContinuous').addEventListener('change', (e) => { pdfState.perView = e.target.checked ? 5 : 1; renderPdf(); });
-$('#pdfDownload').addEventListener('click', () => current && downloadBlob(current, current.name));
+$('#pdfContinuous').addEventListener('change', (e) => { once('pdf-multipage', 'Switched the PDF to five pages at a time'); pdfState.perView = e.target.checked ? 5 : 1; renderPdf(); });
+$('#pdfDownload').addEventListener('click', () => { once('pdf-download', 'Downloaded the open PDF'); current && downloadBlob(current, current.name); });
 window.addEventListener('keydown', (e) => {
   if ($('#pdfPane').hidden || e.target.matches('input,select,textarea')) return;
   if (e.key === 'ArrowRight' || e.key === 'PageDown') goPage(pdfState.page + pdfState.perView);
@@ -276,6 +284,7 @@ viewport.addEventListener('scroll', () => renderWindow());
 window.addEventListener('resize', () => renderWindow());
 
 $('#btnGoto').addEventListener('click', () => {
+  once('sheet-goto', 'Jumped to a row');
   const n = Math.max(1, Math.min(grid.total, Number($('#sheetGoto').value) || 1));
   viewport.scrollTop = (n - 1) * grid.rowH;
   renderWindow(true);
@@ -287,6 +296,7 @@ $('#sheetSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') do
 async function doFind() {
   const query = $('#sheetSearch').value.trim();
   if (!query || !reader) return;
+  once('sheet-search', 'Searched inside a sheet');
   setStatus(`Searching for “${query}”…`);
   const res = await reader.find({ sheet: grid.sheet, query, from: grid.searchRow + 1 });
   if (res.row < 0) {
@@ -304,6 +314,7 @@ async function doFind() {
 
 $('#btnExportCsv').addEventListener('click', async () => {
   if (!reader) return;
+  once('sheet-export-csv', 'Exported a sheet as CSV');
   const esc = (v) => {
     const s = v == null ? '' : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -338,8 +349,10 @@ async function renderStash() {
 
 const stashId = new URLSearchParams(location.search).get('stash');
 if (stashId) {
+  once('opened-from-demo', 'Arrived from demo 1 or 2');
   idbGet(STORES.files, stashId).then((rec) => {
     if (rec) open(new File([rec.blob], rec.name, { type: rec.type }));
   });
 }
 renderStash();
+boot();

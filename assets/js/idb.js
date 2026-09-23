@@ -57,6 +57,18 @@ export async function idbDeletePrefix(store, prefix) {
   });
 }
 
+/** Read every key that starts with `prefix`, in key order. */
+export async function idbKeysPrefix(store, prefix) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(store, 'readonly');
+    const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+    const req = t.objectStore(store).getAllKeys(range);
+    t.oncomplete = () => resolve(req.result);
+    t.onerror = () => reject(t.error);
+  });
+}
+
 /** Read every value whose key starts with `prefix`, in key order. */
 export async function idbGetPrefix(store, prefix) {
   const db = await openDb();

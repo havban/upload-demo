@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { blockAnalytics } from './helpers.mjs';
 
 const base = process.env.BASE || 'http://localhost:8787';
 const browser = await chromium.launch();
@@ -7,6 +8,7 @@ const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
+await blockAnalytics(page);
 await page.goto(`${base}/chunked-upload.html`, { waitUntil: 'networkidle' });
 
 // generate a small file
@@ -43,5 +45,31 @@ console.log('stats:', await page.textContent('#statBytes'), '|', await page.text
 console.log('log tail:', (await page.textContent('#log')).split('\n').slice(-3).join(' // '));
 
 await page.screenshot({ path: '/tmp/shot-chunked.png', fullPage: false });
+
+// Regression: eight parts in flight over a fast link land within milliseconds of each
+// other. The store must record every one of them — an earlier version kept `received`
+// on one shared session record and lost parts to the race, failing at completion with
+// "missing parts".
+await setRange('#optBw', '600');
+await setRange('#optFail', '0');
+await page.evaluate(() => {
+  const n = document.querySelector('#optConcurrency');
+  n.value = '8';
+  n.dispatchEvent(new Event('input', { bubbles: true }));
+});
+await page.selectOption('#optChunk', '262144');
+await page.click('#btnStart');
+await page.waitForFunction(
+  () => ['done', 'error'].includes(document.querySelector('#stateBadge').textContent),
+  null,
+  { timeout: 120_000 },
+);
+const parallelState = await page.textContent('#stateBadge');
+console.log('8 parts in flight, 256 KB chunks ->', parallelState, '|', await page.textContent('#statParts'), 'parts');
+if (parallelState !== 'done') {
+  console.log('FAILED: parallel upload did not complete —', (await page.textContent('#log')).slice(-200));
+  await browser.close();
+  process.exit(1);
+}
 console.log('errors:', errors.length ? errors : 'none');
 await browser.close();

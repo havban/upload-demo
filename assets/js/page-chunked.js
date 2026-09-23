@@ -6,6 +6,7 @@ import { RestBackend } from './backend-rest.js';
 import { ChunkedUploader, UPLOAD_STATE } from './uploader.js';
 import { generatePdfFile, generateXlsxFile } from './filegen.js';
 import { stashFile } from './idb.js';
+import { boot, event, once, sizeBucket } from './analytics.js';
 
 const MB = 1024 * 1024;
 const log = new Logger($('#log'));
@@ -26,6 +27,9 @@ const settings = {
   backend: 'sim',
   restUrl: 'http://localhost:8787',
 };
+
+/** Event-name friendly chunk size: 262144 -> "256kb", 4194304 -> "4mb". */
+const chunkTag = (bytes) => (bytes >= MB ? `${bytes / MB}mb` : `${bytes / 1024}kb`);
 
 /** Push the network sliders into the simulated backend — live, mid-upload included. */
 function syncSim() {
@@ -65,6 +69,7 @@ $('#optHash').addEventListener('change', (e) => { settings.hashParts = e.target.
 
 $('#optBackend').addEventListener('change', (e) => {
   settings.backend = e.target.value;
+  if (settings.backend === 'rest') once('backend-rest', 'Pointed demo 1 at a real server');
   $('#restBox').hidden = settings.backend !== 'rest';
   $('#backendBadge').textContent = settings.backend === 'rest'
     ? `REST · ${$('#optRestUrl').value}`
@@ -129,7 +134,7 @@ function resetUploader() {
   uploader.on('progress', paintProgress);
   uploader.on('chunk', paintChunk);
   uploader.on('done', onDone);
-  uploader.on('error', () => { paintState(UPLOAD_STATE.ERROR); });
+  uploader.on('error', () => { paintState(UPLOAD_STATE.ERROR); once('upload-error', 'Upload gave up'); });
 
   buildChunkMap(uploader.totalChunks);
   paintState(UPLOAD_STATE.IDLE);
@@ -232,11 +237,15 @@ async function onDone(result) {
   if (result.clientManifest) {
     box.append(el('p', { class: 'hint' }, el('code', { class: 'inline', text: result.clientManifest })));
   }
+  event(`upload-done-${sizeBucket(file.size)}`, `Upload finished: ${sizeBucket(file.size)}`);
+  event(verified ? 'verify-ok' : 'verify-mismatch', verified ? 'Integrity check passed' : 'Integrity check failed');
+  if (uploader.retryCount) once('upload-with-retries', 'Upload needed at least one retry');
   $('#btnDownload').disabled = !result.blob && settings.backend !== 'rest';
   $('#btnPreview').hidden = false;
   $('#btnPreview').onclick = async (e) => {
     e.preventDefault();
     const blob = result.blob || await uploader.backend.download(uploader.uploadId);
+    event('preview-handoff', 'Opened an uploaded file in the preview page');
     const id = await stashFile({ name: file.name, type: file.type, size: blob.size, blob, source: 'chunked upload' });
     location.href = `preview.html?stash=${encodeURIComponent(id)}`;
   };
@@ -250,11 +259,14 @@ $('#btnStart').addEventListener('click', () => {
   // A finished upload gets a fresh session, otherwise the server would just say
   // "I already have every part" and finish instantly.
   if (uploader.state === UPLOAD_STATE.DONE) resetUploader();
+  event('upload-start', 'Started a chunked upload');
+  once(`chunk-${chunkTag(settings.chunkSize)}`, `Chunk size: ${fmtBytes(settings.chunkSize)}`);
   uploader.start();
 });
-$('#btnPause').addEventListener('click', () => uploader.pause());
+$('#btnPause').addEventListener('click', () => { once('upload-paused', 'Paused an upload'); uploader.pause(); });
 $('#btnResume').addEventListener('click', () => uploader.resume());
 $('#btnCancel').addEventListener('click', async () => {
+  once('upload-cancelled', 'Cancelled an upload');
   await uploader.abort();
   log.warn('Upload cancelled — server session deleted');
   buildChunkMap(uploader.totalChunks);
@@ -299,6 +311,7 @@ async function generate(kind) {
       // of rows to weigh 50 MB, which is a different demo — that one is demo 2.
       : await generateXlsxFile({ targetBytes, compress: false, onProgress });
     log.ok(`Generated ${generated.name} — ${fmtBytes(generated.size)} in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    event(`generate-${kind}-${sizeBucket(generated.size)}`, `Generated a ${kind.toUpperCase()}: ${sizeBucket(generated.size)}`);
     setFile(generated);
   } catch (err) {
     log.err(`Generation failed: ${err.message}`);
@@ -319,6 +332,7 @@ $('#btnSample').addEventListener('click', async () => {
     const res = await fetch('samples/synthetic-ledger-2mb.pdf');
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
+    once('sample-pdf', 'Loaded the committed sample PDF');
     setFile(new File([blob], 'synthetic-ledger-2mb.pdf', { type: 'application/pdf' }));
   } catch (err) {
     log.err(`Could not load the sample: ${err.message}`);
@@ -346,4 +360,5 @@ async function refreshSessions() {
 }
 
 refreshSessions();
+boot();
 log.info('Ready. Generate a file or drop one in, then press Start upload.');
