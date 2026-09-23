@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload Demo — chunked uploads, batched rows, file preview</title>
+<meta name="description" content="A static demo of chunked large-file uploads with a progress bar, batched row imports from Excel, and in-browser PDF/Excel preview.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📤</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="./"><span class="logo">↑</span> Upload Demo</a>
+    <nav class="tabs">
+      <a href="./" aria-current="page">Overview</a>
+      <a href="chunked-upload.html">1 · Chunked upload</a>
+      <a href="row-upload.html">2 · Row batches</a>
+      <a href="preview.html">3 · Preview</a>
+    </nav>
+    <span class="spacer"></span>
+    <a class="badge" href="https://github.com/havban/upload-demo" target="_blank" rel="noopener">Source on GitHub</a>
+  </div>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1>Moving big files through a browser, visibly</h1>
+    <p>
+      Three self-contained demos of the same problem: a file too big to POST in one go. Everything runs
+      client-side — the sample 50&nbsp;MB PDF and Excel workbooks are generated in your tab, and the upload
+      API is simulated in JavaScript — so the whole thing works as a static site on GitHub Pages.
+    </p>
+  </div>
+
+  <div class="grid cols-3">
+    <a class="card card-link" href="chunked-upload.html">
+      <span class="step">DEMO 1</span>
+      <h2>Chunked upload with a progress bar</h2>
+      <p class="hint">
+        Slice a 50&nbsp;MB file into parts, hash each one, send several in parallel, and watch the bar,
+        throughput and ETA move. Includes retries with backoff, pause/resume, resume after a page reload,
+        and a SHA-256 integrity check at the end.
+      </p>
+      <ul class="tight">
+        <li>Generate a 50&nbsp;MB PDF or Excel file on the spot</li>
+        <li>Tune chunk size, parallelism, bandwidth and failure rate</li>
+        <li>Per-chunk status map, live request log</li>
+      </ul>
+    </a>
+
+    <a class="card card-link" href="row-upload.html">
+      <span class="step">DEMO 2</span>
+      <h2>Row-by-row import in batches</h2>
+      <p class="hint">
+        A workbook with hundreds of thousands of rows is not a file problem, it is a record problem.
+        Parse the sheet in a worker, then post it in batches of 100 / 500 / 1000 rows with a progress bar
+        per batch and a validation report.
+      </p>
+      <ul class="tight">
+        <li>Build workbooks up to 250k rows in the browser</li>
+        <li>Batch size, parallel batches, retry on failure</li>
+        <li>Rejected rows collected with the reason why</li>
+      </ul>
+    </a>
+
+    <a class="card card-link" href="preview.html">
+      <span class="step">DEMO 3</span>
+      <h2>Preview Excel and PDF in the tab</h2>
+      <p class="hint">
+        Open any of the generated files without downloading them: PDF pages rendered with pdf.js, workbooks
+        rendered as a virtualised grid that stays smooth at 250k rows.
+      </p>
+      <ul class="tight">
+        <li>Sheet tabs, search, jump-to-row, CSV export</li>
+        <li>PDF paging, zoom, page jump</li>
+        <li>Picks up whatever the other two demos just produced</li>
+      </ul>
+    </a>
+  </div>
+
+  <div class="grid cols-2" style="margin-top:16px">
+    <div class="card">
+      <h2>How the "upload" works without a server</h2>
+      <p class="hint">
+        GitHub Pages only serves static files, so the demo ships an in-browser stand-in for the API
+        (<code>assets/js/backend-simulated.js</code>). It implements the same five calls a real service would
+        expose and fakes the network in between — bandwidth, latency, jitter and a failure rate you control:
+      </p>
+      <div class="log" style="height:auto">POST   /uploads                    → { uploadId, received[] }
+GET    /uploads/:id                → which parts already landed
+PUT    /uploads/:id/parts/:index   → one chunk + its SHA-256
+POST   /uploads/:id/complete       → stitch, verify, finish
+DELETE /uploads/:id                → discard the session</div>
+      <p class="hint">
+        Received parts are written to IndexedDB, which is why a reload mid-upload resumes instead of starting
+        over. The repo also contains a real Node implementation of the same five routes in <code>server/</code> —
+        start it, paste its URL into demo 1, and the identical client code drives a real upload over the wire.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>The sample files are generated, not collected</h2>
+      <p class="hint">
+        Nothing here is real data. Both file writers are hand-written and live in this repo:
+      </p>
+      <ul class="tight">
+        <li><code>assets/js/pdf-writer.js</code> — emits a real PDF 1.7: catalog, page tree, base-14 fonts,
+          one uncompressed content stream per page. A 50&nbsp;MB document is ~5,800 landscape ledger pages
+          and takes about a second to build.</li>
+        <li><code>assets/js/xlsx-writer.js</code> — emits a real OOXML workbook, streaming rows in blocks.
+          It can store the sheet uncompressed, which is the only way to hit a 50&nbsp;MB target without
+          millions of rows.</li>
+        <li><code>assets/js/dataset.js</code> — the invented ledger itself: seeded PRNG, fictional names,
+          <code>example-*.test</code> emails, and a deliberate data defect roughly every 150 rows so demo 2
+          has something to reject.</li>
+      </ul>
+      <p class="hint">
+        Smaller pre-built copies are committed in <code>samples/</code> and load with one click on the
+        <a href="preview.html">preview page</a>, if you would rather not wait for a generator.
+      </p>
+    </div>
+  </div>
+</main>
+
+<footer class="site">
+  Static demo · no data leaves your browser · <a href="https://github.com/havban/upload-demo">github.com/havban/upload-demo</a>
+</footer>
+</body>
+</html>

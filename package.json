@@ -1,0 +1,16 @@
+{
+  "name": "upload-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Chunked large-file uploads, batched row imports and in-browser PDF/Excel preview — a static demo with no build step.",
+  "homepage": "https://havban.github.io/upload-demo/",
+  "repository": { "type": "git", "url": "https://github.com/havban/upload-demo.git" },
+  "license": "MIT",
+  "scripts": {
+    "start": "node server/server.mjs",
+    "serve": "python3 -m http.server 8899",
+    "samples": "node tools/generate-samples.mjs",
+    "test": "node tests/run-all.mjs"
+  }
+}

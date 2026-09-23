@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chunked upload — Upload Demo</title>
+<meta name="description" content="Upload a 50 MB PDF or Excel file in chunks, with a live progress bar, retries, pause/resume and a SHA-256 integrity check.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📤</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="./"><span class="logo">↑</span> Upload Demo</a>
+    <nav class="tabs">
+      <a href="./">Overview</a>
+      <a href="chunked-upload.html" aria-current="page">1 · Chunked upload</a>
+      <a href="row-upload.html">2 · Row batches</a>
+      <a href="preview.html">3 · Preview</a>
+    </nav>
+    <span class="spacer"></span>
+    <a class="badge" href="https://github.com/havban/upload-demo" target="_blank" rel="noopener">Source on GitHub</a>
+  </div>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1>1 · Chunked upload of a large file</h1>
+    <p>
+      Pick (or generate) a 50&nbsp;MB PDF or Excel file. It is sliced into parts, each part is hashed and sent
+      separately with several in flight at once, failures are retried with backoff, and the whole thing can be
+      paused, resumed — even across a page reload — or cancelled. The bar below tracks bytes actually accepted
+      by the server, not bytes handed to the network.
+    </p>
+  </div>
+
+  <div class="grid side">
+    <div class="grid" style="gap:16px">
+
+      <!-- ------------------------------------------------ pick a file -->
+      <section class="card">
+        <h2>File</h2>
+        <p class="hint">Drop a file here, or generate a synthetic one. Nothing is sent anywhere.</p>
+
+        <div class="dropzone" id="dropzone" style="margin-top:12px">
+          <div class="dz-title">Drop a file, or click to browse</div>
+          <div class="dz-sub">Any file works — the demos are tuned for PDF and .xlsx</div>
+          <input type="file" id="fileInput" class="sr-only">
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <label class="field" style="margin:0;min-width:120px">
+            <span>Generate</span>
+            <select id="genSize">
+              <option value="5">5 MB</option>
+              <option value="25">25 MB</option>
+              <option value="50" selected>50 MB</option>
+              <option value="100">100 MB</option>
+            </select>
+          </label>
+          <button class="btn" id="genPdf" type="button">📄 Generate PDF</button>
+          <button class="btn" id="genXlsx" type="button">📊 Generate Excel</button>
+          <span class="spacer"></span>
+          <button class="btn small" id="btnSample" type="button">Load 2 MB sample PDF</button>
+        </div>
+
+        <div id="genProgress" hidden style="margin-top:12px">
+          <div class="progress-head"><span id="genLabel">Generating…</span><span class="pct" id="genPct">0%</span></div>
+          <div class="progress busy"><div class="bar" id="genBar"></div></div>
+        </div>
+
+        <div id="fileChip" hidden style="margin-top:14px"></div>
+      </section>
+
+      <!-- ------------------------------------------------ the upload -->
+      <section class="card">
+        <div class="row" style="margin-bottom:12px">
+          <h2 style="margin:0">Upload</h2>
+          <span class="badge" id="stateBadge">idle</span>
+          <span class="spacer"></span>
+          <span class="badge accent" id="backendBadge">Simulated (in-browser)</span>
+        </div>
+
+        <div class="progress-head">
+          <span id="progressLabel">Waiting for a file</span>
+          <span class="pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress" id="progressOuter"><div class="bar" id="progressBar"></div></div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Transferred</div><div class="v" id="statBytes">0 B</div></div>
+          <div class="stat"><div class="k">Throughput</div><div class="v" id="statSpeed">–</div></div>
+          <div class="stat"><div class="k">ETA</div><div class="v" id="statEta">–</div></div>
+          <div class="stat"><div class="k">Parts</div><div class="v" id="statParts">0 / 0</div></div>
+          <div class="stat"><div class="k">Retries</div><div class="v" id="statRetries">0</div></div>
+          <div class="stat"><div class="k">Wire traffic</div><div class="v" id="statWire">0 B</div></div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary" id="btnStart" disabled>Start upload</button>
+          <button class="btn" id="btnPause" disabled>Pause</button>
+          <button class="btn" id="btnResume" disabled hidden>Resume</button>
+          <button class="btn danger" id="btnCancel" disabled>Cancel</button>
+          <span class="spacer"></span>
+          <button class="btn small" id="btnDownload" disabled>Download what the server stored</button>
+          <a class="btn small" id="btnPreview" hidden>Open in preview →</a>
+        </div>
+
+        <div id="result" hidden style="margin-top:14px"></div>
+
+        <p class="section-title" style="margin-top:20px">Chunk map</p>
+        <div class="chunkmap" id="chunkmap"></div>
+        <div class="legend">
+          <span><b style="background:var(--line-2);border:1px solid var(--line)"></b> queued</span>
+          <span><b style="background:var(--accent)"></b> in flight</span>
+          <span><b style="background:var(--warn)"></b> retrying</span>
+          <span><b style="background:var(--ok)"></b> stored</span>
+          <span><b style="background:var(--err)"></b> failed</span>
+        </div>
+      </section>
+
+      <!-- ------------------------------------------------ log -->
+      <section class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0">Request log</h2>
+          <span class="spacer"></span>
+          <button class="btn small" id="btnClearLog">Clear</button>
+        </div>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+
+    <!-- ------------------------------------------------ settings -->
+    <aside class="grid" style="gap:16px">
+      <section class="card">
+        <h2>Transfer settings</h2>
+        <label class="field" style="margin-top:12px">
+          <span>Chunk size</span>
+          <select id="optChunk">
+            <option value="262144">256 KB</option>
+            <option value="1048576">1 MB</option>
+            <option value="2097152">2 MB</option>
+            <option value="4194304" selected>4 MB</option>
+            <option value="8388608">8 MB</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Parallel parts — <b id="optConcurrencyVal">3</b></span>
+          <input type="range" id="optConcurrency" min="1" max="8" value="3">
+        </label>
+        <label class="field">
+          <span>Max attempts per part — <b id="optRetriesVal">4</b></span>
+          <input type="range" id="optRetries" min="1" max="8" value="4">
+        </label>
+        <label class="check"><input type="checkbox" id="optHash" checked> SHA-256 each part (integrity check)</label>
+      </section>
+
+      <section class="card">
+        <h2>Simulated network</h2>
+        <p class="hint">These knobs only affect the in-browser backend.</p>
+        <label class="field" style="margin-top:12px">
+          <span>Bandwidth — <b id="optBwVal">80</b> Mbps</span>
+          <input type="range" id="optBw" min="2" max="600" value="80" step="2">
+        </label>
+        <label class="field">
+          <span>Latency — <b id="optLatVal">60</b> ms</span>
+          <input type="range" id="optLat" min="0" max="500" value="60" step="5">
+        </label>
+        <label class="field">
+          <span>Failure rate — <b id="optFailVal">5</b>%</span>
+          <input type="range" id="optFail" min="0" max="50" value="5">
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Backend</h2>
+        <label class="field" style="margin-top:12px">
+          <span>Target</span>
+          <select id="optBackend">
+            <option value="sim" selected>Simulated (in-browser)</option>
+            <option value="rest">Real server (REST)</option>
+          </select>
+        </label>
+        <div id="restBox" hidden>
+          <label class="field">
+            <span>Base URL</span>
+            <input type="url" id="optRestUrl" value="http://localhost:8787" placeholder="http://localhost:8787">
+          </label>
+          <button class="btn small" id="btnPing">Test connection</button>
+          <p class="hint" id="pingResult"></p>
+          <p class="hint">Run <code>node server/server.mjs</code> from the repo to get one.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Stored sessions</h2>
+        <p class="hint">Parts the in-browser backend is holding in IndexedDB. Unfinished uploads resume from here.</p>
+        <div id="sessionList" style="margin-top:10px"></div>
+        <button class="btn small danger" id="btnPurge" style="margin-top:10px">Delete all stored parts</button>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<footer class="site">
+  Static demo · no data leaves your browser · <a href="https://github.com/havban/upload-demo">github.com/havban/upload-demo</a>
+</footer>
+
+<script type="module" src="assets/js/page-chunked.js"></script>
+</body>
+</html>

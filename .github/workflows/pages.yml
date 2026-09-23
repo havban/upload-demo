@@ -1,0 +1,51 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity-check the generators
+        run: |
+          node --version
+          node -e "
+            import('./assets/js/pdf-writer.js').then(async (m) => {
+              const { bytes, pageCount } = await m.buildPdf({ pages: 20 });
+              if (!bytes || pageCount !== 20) throw new Error('pdf-writer produced nothing');
+              console.log('pdf-writer ok:', bytes, 'bytes,', pageCount, 'pages');
+            })
+          "
+          node -e "
+            import('./assets/js/xlsx-writer.js').then(async (m) => {
+              const { bytes, rowCount } = await m.buildWorkbook({ rowCount: 500 });
+              if (!bytes || rowCount !== 500) throw new Error('xlsx-writer produced nothing');
+              console.log('xlsx-writer ok:', bytes, 'bytes,', rowCount, 'rows');
+            })
+          "
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

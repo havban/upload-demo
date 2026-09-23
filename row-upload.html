@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Row batches — Upload Demo</title>
+<meta name="description" content="Import a very large Excel sheet row by row, posting batches of 100 / 500 / 1000 rows with a progress bar and a validation report.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="./"><span class="logo">↑</span> Upload Demo</a>
+    <nav class="tabs">
+      <a href="./">Overview</a>
+      <a href="chunked-upload.html">1 · Chunked upload</a>
+      <a href="row-upload.html" aria-current="page">2 · Row batches</a>
+      <a href="preview.html">3 · Preview</a>
+    </nav>
+    <span class="spacer"></span>
+    <a class="badge" href="https://github.com/havban/upload-demo" target="_blank" rel="noopener">Source on GitHub</a>
+  </div>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1>2 · Importing a very large sheet, a batch of rows at a time</h1>
+    <p>
+      A workbook with a quarter of a million rows is not a file problem, it is a record problem. Here the sheet
+      is parsed in a Web Worker, then posted to the API in batches of 100, 500 or 1000 rows — the progress bar
+      advances once per batch, each batch is validated server-side, and the rows that fail come back with the
+      reason why. Roughly one row in 150 of the generated data is deliberately broken.
+    </p>
+  </div>
+
+  <div class="grid side">
+    <div class="grid" style="gap:16px">
+
+      <section class="card">
+        <h2>Workbook</h2>
+        <p class="hint">Generate one, or drop in your own <code>.xlsx</code> — the first row is treated as the header.</p>
+
+        <div class="dropzone" id="dropzone" style="margin-top:12px">
+          <div class="dz-title">Drop a spreadsheet, or click to browse</div>
+          <div class="dz-sub">.xlsx / .xlsm / .csv</div>
+          <input type="file" id="fileInput" class="sr-only">
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <label class="field" style="margin:0;min-width:140px">
+            <span>Rows to generate</span>
+            <select id="genRows">
+              <option value="10000">10,000</option>
+              <option value="50000" selected>50,000</option>
+              <option value="100000">100,000</option>
+              <option value="250000">250,000 (~20s to build and parse)</option>
+            </select>
+          </label>
+          <button class="btn" id="genXlsx" type="button">📊 Generate workbook</button>
+          <button class="btn small" id="btnSaveXlsx" disabled>Save .xlsx</button>
+          <span class="spacer"></span>
+          <a class="btn small" id="btnPreview" hidden>Open in preview →</a>
+        </div>
+
+        <div id="genProgress" hidden style="margin-top:12px">
+          <div class="progress-head"><span id="genLabel">Generating…</span><span class="pct" id="genPct">0%</span></div>
+          <div class="progress busy"><div class="bar" id="genBar"></div></div>
+        </div>
+
+        <div id="fileChip" hidden style="margin-top:14px"></div>
+      </section>
+
+      <section class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0">Parse</h2>
+          <span class="badge" id="parseBadge">waiting</span>
+          <span class="spacer"></span>
+          <span class="hint" id="parseMeta"></span>
+        </div>
+        <div class="progress-head"><span id="parseLabel">No workbook loaded</span><span class="pct" id="parsePct">0%</span></div>
+        <div class="progress" id="parseOuter"><div class="bar" id="parseBar"></div></div>
+        <p class="hint">
+          SheetJS is synchronous, so decoding runs in <code>assets/js/xlsx.worker.js</code> and rows are streamed
+          back 5,000 at a time. That is why this bar moves instead of the tab freezing.
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="row" style="margin-bottom:12px">
+          <h2 style="margin:0">Import</h2>
+          <span class="badge" id="importBadge">idle</span>
+          <span class="spacer"></span>
+          <span class="hint" id="batchLabel"></span>
+        </div>
+
+        <div class="progress-head">
+          <span id="importLabel">Nothing to import yet</span>
+          <span class="pct" id="importPct">0%</span>
+        </div>
+        <div class="progress" id="importOuter"><div class="bar" id="importBar"></div></div>
+
+        <div style="margin-top:10px">
+          <div class="progress-head" style="font-size:12.5px;color:var(--ink-2)">
+            <span id="currentBatchLabel">Current batch</span><span id="currentBatchRows"></span>
+          </div>
+          <div class="progress thin"><div class="bar" id="batchBar"></div></div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Rows sent</div><div class="v" id="statRows">0</div></div>
+          <div class="stat"><div class="k">Accepted</div><div class="v" id="statAccepted">0</div></div>
+          <div class="stat"><div class="k">Rejected</div><div class="v" id="statRejected">0</div></div>
+          <div class="stat"><div class="k">Rows / sec</div><div class="v" id="statRate">–</div></div>
+          <div class="stat"><div class="k">Batches</div><div class="v" id="statBatches">0 / 0</div></div>
+          <div class="stat"><div class="k">Retries</div><div class="v" id="statRetries">0</div></div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary" id="btnStart" disabled>Start import</button>
+          <button class="btn" id="btnPause" disabled>Pause</button>
+          <button class="btn" id="btnResume" hidden>Resume</button>
+          <button class="btn danger" id="btnCancel" disabled>Cancel</button>
+        </div>
+
+        <div id="importResult" hidden style="margin-top:14px"></div>
+
+        <p class="section-title" style="margin-top:20px">Batch map</p>
+        <div class="chunkmap" id="batchmap"></div>
+        <div class="legend">
+          <span><b style="background:var(--line-2);border:1px solid var(--line)"></b> queued</span>
+          <span><b style="background:var(--accent)"></b> posting</span>
+          <span><b style="background:var(--warn)"></b> retrying</span>
+          <span><b style="background:var(--ok)"></b> committed</span>
+          <span><b style="background:var(--err)"></b> failed</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0">Rejected rows</h2>
+          <span class="badge err" id="rejectCount">0</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="btnExportErrors" disabled>Export error report (CSV)</button>
+        </div>
+        <div class="table-wrap" style="max-height:300px">
+          <table class="data" id="rejectTable">
+            <thead><tr><th>Sheet row</th><th>Order ref</th><th>Problem</th></tr></thead>
+            <tbody><tr><td colspan="3" class="hint" style="padding:12px">No rejections yet.</td></tr></tbody>
+          </table>
+        </div>
+        <p class="hint">Showing the first 200 rejections; the CSV export contains all of them.</p>
+      </section>
+
+      <section class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0">Batch log</h2>
+          <span class="spacer"></span>
+          <button class="btn small" id="btnClearLog">Clear</button>
+        </div>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+
+    <aside class="grid" style="gap:16px">
+      <section class="card">
+        <h2>Batching</h2>
+        <label class="field" style="margin-top:12px">
+          <span>Rows per batch</span>
+          <select id="optBatch">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1,000</option>
+            <option value="5000">5,000</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Parallel batches — <b id="optConcurrencyVal">2</b></span>
+          <input type="range" id="optConcurrency" min="1" max="6" value="2">
+        </label>
+        <label class="field">
+          <span>Max attempts per batch — <b id="optRetriesVal">4</b></span>
+          <input type="range" id="optRetries" min="1" max="8" value="4">
+        </label>
+        <label class="check"><input type="checkbox" id="optValidate" checked> Validate rows server-side</label>
+        <label class="check"><input type="checkbox" id="optStopOnError"> Stop the import on the first failed batch</label>
+      </section>
+
+      <section class="card">
+        <h2>Simulated API</h2>
+        <label class="field" style="margin-top:12px">
+          <span>Request latency — <b id="optLatVal">70</b> ms</span>
+          <input type="range" id="optLat" min="0" max="400" value="70" step="5">
+        </label>
+        <label class="field">
+          <span>Insert cost — <b id="optRowCostVal">0.35</b> ms/row</span>
+          <input type="range" id="optRowCost" min="0" max="200" value="35">
+        </label>
+        <label class="field">
+          <span>Batch failure rate — <b id="optFailVal">4</b>%</span>
+          <input type="range" id="optFail" min="0" max="40" value="4">
+        </label>
+        <p class="hint">
+          Bigger batches amortise the round trip but make a retry more expensive — the whole batch is
+          resent. Watch the rows/sec figure as you change them.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Column mapping</h2>
+        <p class="hint">Header labels found in row 1, mapped to the fields the API validates.</p>
+        <div id="mapping" style="margin-top:10px"></div>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<footer class="site">
+  Static demo · no data leaves your browser · <a href="https://github.com/havban/upload-demo">github.com/havban/upload-demo</a>
+</footer>
+
+<script type="module" src="assets/js/page-rows.js"></script>
+</body>
+</html>
